@@ -2,7 +2,6 @@
 
 pub use pallet::*;
 
-
 #[frame_support::pallet]
 pub mod pallet {
 	//! A demonstration of an offchain worker that sends onchain callbacks
