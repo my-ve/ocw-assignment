@@ -141,7 +141,7 @@ pub mod pallet {
 	#[derive(Deserialize, Encode, Decode, Default)]
 	struct DotPriceData {
 		#[serde(deserialize_with = "de_string_to_bytes")]
-		#[serde(rename="priceUsd")]
+		#[serde(rename = "priceUsd")]
 		price_usd: Vec<u8>,
 	}
 
@@ -392,8 +392,32 @@ pub mod pallet {
 
 				log::info!("{:?}", price);
 
-				//let price_str: &str = str::from_utf8(&price.data.price_usd).unwrap();
-				//let price_str: &str = &price.data.price_usd;
+				let price_str: &str = str::from_utf8(&price.data.price_usd).unwrap_or("0");
+
+				log::info!("Price Str: {}", price_str);
+
+				let price_v: Vec<&str> = price_str.split('.').collect();
+
+				log::info!("Price Vec: {:?}", price_v);
+
+				let num: u64 = price_v[0].parse().unwrap_or(0);
+
+				let mut dec = 032;
+
+				if price_v.len() > 1 {
+					if price_v[1].len() > 6 {
+						dec = price_v[1].get(0..6).unwrap_or("0").parse().unwrap_or(0u32);
+					} else {
+						dec = price_v[1].parse().unwrap_or(0u32);
+						dec = dec * 10u32.pow(6 - price_v[1].len() as u32);
+					}
+				}
+
+				log::info!("Price num: {}, dec: {}", num, dec);
+
+				let permill = Permill::from_parts(dec);
+
+				log::info!("permill {:?}", permill);
 			}
 
 			Ok(())
