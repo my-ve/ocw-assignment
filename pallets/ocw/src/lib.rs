@@ -97,6 +97,18 @@ pub mod pallet {
 		}
 	}
 
+	#[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug)]
+	pub struct PricePayload<Public> {
+		price: (u64, Permill),
+		public: Public,
+	}
+
+	impl<T: SigningTypes> SignedPayload<T> for PricePayload<T::Public> {
+		fn public(&self) -> T::Public {
+			self.public.clone()
+		}
+	}
+
 	// ref: https://serde.rs/container-attrs.html#crate
 	#[derive(Deserialize, Encode, Decode, Default)]
 	struct GithubInfo {
@@ -185,6 +197,7 @@ pub mod pallet {
 	#[pallet::generate_deposit(pub(super) fn deposit_event)]
 	pub enum Event<T: Config> {
 		NewNumber(Option<T::AccountId>, u64),
+		NewPrice(Option<T::AccountId>, (u64, Permill)),
 	}
 
 	// Errors inform users that something went wrong.
@@ -272,6 +285,12 @@ pub mod pallet {
 					}
 					valid_tx(b"submit_number_unsigned_with_signed_payload".to_vec())
 				}
+				Call::submit_price_unsigned_with_signed_payload(ref payload, ref signature) => {
+					if !SignedPayload::<T>::verify::<T::AuthorityId>(payload, signature.clone()) {
+						return InvalidTransaction::BadProof.into();
+					}
+					valid_tx(b"submit_price_unsigned_with_signed_payload".to_vec())
+				}
 				_ => InvalidTransaction::Call.into(),
 			}
 		}
@@ -315,6 +334,25 @@ pub mod pallet {
 			Self::deposit_event(Event::NewNumber(None, number));
 			Ok(())
 		}
+
+		//使用*不签名但具签名信息的交易*将DOT价格信息提交到链上，
+		//是因为希望offchain worker不需要付手续费，但想知道该交易的来源
+		#[pallet::weight(10000)]
+		pub fn submit_price_unsigned_with_signed_payload(
+			origin: OriginFor<T>,
+			payload: PricePayload<T::Public>,
+			_signature: T::Signature,
+		) -> DispatchResult {
+			let _ = ensure_none(origin)?;
+			// we don't need to verify the signature here because it has been verified in
+			//   `validate_unsigned` function when sending out the unsigned tx.
+			let PricePayload { price, public } = payload;
+			log::info!("submit_price_unsigned_with_signed_payload: ({:?}, {:?})", price, public);
+			Self::append_or_replace_price(price);
+
+			Self::deposit_event(Event::NewPrice(None, price));
+			Ok(())
+		}
 	}
 
 	impl<T: Config> Pallet<T> {
@@ -352,8 +390,6 @@ pub mod pallet {
 
 			// 这个 http 请求可得到当前 DOT 价格：
 			// [https://api.coincap.io/v2/assets/polkadot](https://api.coincap.io/v2/assets/polkadot)。
-
-			let dot_price = StorageValueRef::persistent(b"offchain-worker:dot-price");
 
 			let mut lock = StorageLock::<BlockAndTime<Self>>::new(b"offchain-worker::lock");
 
@@ -418,6 +454,22 @@ pub mod pallet {
 				let permill = Permill::from_parts(dec);
 
 				log::info!("permill {:?}", permill);
+
+				let signer = Signer::<T, T::AuthorityId>::any_account();
+
+				if let Some((_, res)) = signer.send_unsigned_transaction(
+					|acct| PricePayload { price: (num, permill), public: acct.public.clone() },
+					Call::submit_price_unsigned_with_signed_payload,
+				) {
+					return res.map_err(|_| {
+						log::error!("Failed in fetch_price_info!");
+						<Error<T>>::OffchainUnsignedTxSignedPayloadError
+					});
+				}
+
+				//The case of `None`: no account is available for sending
+				log::error!("No local account available");
+				return Err(<Error<T>>::NoLocalAcctForSigning);
 			}
 
 			Ok(())
